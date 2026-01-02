@@ -21,8 +21,6 @@ class LocalChatbot:
         
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         
-        # Load in 8-bit to reduce memory usage (requires bitsandbytes)
-        # If you get an error, remove quantization_config
         try:
             self.model = AutoModelForCausalLM.from_pretrained(
                 model_name,
@@ -31,7 +29,6 @@ class LocalChatbot:
                 load_in_8bit=True
             )
         except:
-            # Fallback without 8-bit quantization
             print("8-bit quantization not available, using fp16 instead...\n")
             self.model = AutoModelForCausalLM.from_pretrained(
                 model_name,
@@ -51,10 +48,8 @@ class LocalChatbot:
             "content": user_input
         })
         
-        # Format as conversation
         messages = self.conversation_history
         
-        # Use chat template if available (Mistral supports this)
         try:
             prompt = self.tokenizer.apply_chat_template(
                 messages,
@@ -62,14 +57,11 @@ class LocalChatbot:
                 add_generation_prompt=True
             )
         except:
-            # Fallback formatting
             prompt = self._format_messages(messages)
         
-        # Tokenize
         inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
         input_length = inputs['input_ids'].shape[-1]
         
-        # Generate with streaming
         full_response = ""
         stop_phrases = ["USER:", "User:", "user:", "YOU:", "You:", "ASSISTANT:", "Assistant:"]
         
@@ -88,25 +80,21 @@ class LocalChatbot:
                 output_scores=False
             )
         
-        # Decode the full response first
         full_text = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
         full_response = full_text[len(self.tokenizer.decode(inputs['input_ids'][0], skip_special_tokens=True)):].strip()
         
-        # Stop at common delimiters to prevent generating user input
         for phrase in stop_phrases:
             if phrase in full_response:
                 full_response = full_response[:full_response.index(phrase)].strip()
                 break
         
-        # Stream characters to queue if provided
         if token_queue:
             for char in full_response:
                 token_queue.put(char)
                 import time
-                time.sleep(0.01)  # Small delay for typing effect
-            token_queue.put(None)  # Signal end of response
+                time.sleep(0.01)
+            token_queue.put(None)
         
-        # Add to history
         self.conversation_history.append({
             "role": "assistant",
             "content": full_response
@@ -136,75 +124,97 @@ class LocalChatbot:
         screen = pygame.display.set_mode((screen_width, screen_height))
         pygame.display.set_caption("Local Chatbot - Pygame UI")
         clock = pygame.time.Clock()
-        font = pygame.font.Font(None, 26)
-        small_font = pygame.font.Font(None, 20)
+        font = pygame.font.Font(None, 22)
+        small_font = pygame.font.Font(None, 18)
 
-        chat_messages = []  # Store messages as (role, content) tuples
+        chat_messages = []  # Store messages as {"role": str, "content": str}
         input_text = ""
         generating = False
         response_queue = Queue()
-        scroll_offset = 0  # For scrolling
-        current_response = ""  # For streaming response
+        scroll_offset = 0
+        current_response = ""
 
-        line_height = 32
+        line_height = 28
         history_height = screen_height - 120
         max_visible_lines = history_height // line_height
         
-        # Send button
         send_button_rect = pygame.Rect(screen_width - 100, screen_height - 80, 80, 50)
 
         BG_COLOR = (30, 30, 40)
         INPUT_BG = (50, 50, 60)
         USER_COLOR = (100, 180, 255)
-        ASSISTANT_COLOR = (255, 200, 100)
+        ASSISTANT_COLOR = (200, 220, 100)
         SYSTEM_COLOR = (180, 180, 180)
-        THINKING_COLOR = (200, 200, 0)
+        THINKING_COLOR = (150, 200, 255)
         TEXT_COLOR = (255, 255, 255)
 
-        def wrap_text(text, max_width, use_small=False):
-            """Wrap text to fit within max_width."""
-            current_font = small_font if use_small else font
-            words = text.split(' ')
+        def wrap_text(text, max_width, current_font):
+            """Wrap text to fit within max_width, respecting existing line breaks."""
             lines = []
-            current = []
-            for word in words:
-                test = ' '.join(current + [word]) if current else word
-                if current_font.size(test)[0] <= max_width:
-                    current.append(word)
-                else:
-                    if current:
-                        lines.append(' '.join(current))
-                        current = [word]
+            # First split by existing newlines
+            for paragraph in text.split('\n'):
+                if not paragraph.strip():
+                    lines.append("")
+                    continue
+                
+                words = paragraph.split(' ')
+                current_line = []
+                for word in words:
+                    test_line = ' '.join(current_line + [word]) if current_line else word
+                    if current_font.size(test_line)[0] <= max_width:
+                        current_line.append(word)
                     else:
-                        # Word is too long, add it anyway and start new line
-                        lines.append(word)
-            if current:
-                lines.append(' '.join(current))
+                        if current_line:
+                            lines.append(' '.join(current_line))
+                            current_line = [word]
+                        else:
+                            lines.append(word)
+                if current_line:
+                    lines.append(' '.join(current_line))
             return lines
 
         def add_message(role, content):
             """Add a message to the chat display."""
-            chat_messages.append((role, content))
+            chat_messages.append({"role": role, "content": content})
 
         def render_chat_lines():
             """Convert chat messages to display lines with proper formatting."""
             display_lines = []
-            for role, content in chat_messages:
+            for msg in chat_messages:
+                role = msg["role"]
+                content = msg["content"]
+                
                 if role == "system":
-                    wrapped = wrap_text(content, screen_width - 60, use_small=True)
+                    wrapped = wrap_text(content, screen_width - 60, small_font)
                     for i, line in enumerate(wrapped):
                         if i == 0:
-                            display_lines.append(("system", f"System: {line}"))
+                            display_lines.append({
+                                "text": f"[System] {line}",
+                                "role": "system",
+                                "font": small_font
+                            })
                         else:
-                            display_lines.append(("system", line))
+                            display_lines.append({
+                                "text": line,
+                                "role": "system",
+                                "font": small_font
+                            })
                 else:
                     prefix = "You: " if role == "user" else "Assistant: "
-                    wrapped = wrap_text(content, screen_width - 80, use_small=False)
+                    wrapped = wrap_text(content, screen_width - 100, font)
                     for i, line in enumerate(wrapped):
                         if i == 0:
-                            display_lines.append((role, prefix + line))
+                            display_lines.append({
+                                "text": prefix + line,
+                                "role": role,
+                                "font": font
+                            })
                         else:
-                            display_lines.append((role, line))
+                            display_lines.append({
+                                "text": line,
+                                "role": role,
+                                "font": font
+                            })
             return display_lines
 
         running = True
@@ -216,7 +226,7 @@ class LocalChatbot:
                     if event.key == K_ESCAPE:
                         running = False
                     elif generating:
-                        continue  # disable input while generating
+                        continue
                     elif event.key == K_RETURN:
                         msg = input_text.strip()
                         input_text = ""
@@ -229,7 +239,6 @@ class LocalChatbot:
                             add_message("system", "Conversation history cleared.")
                         elif msg:
                             add_message("user", msg)
-                            chat_messages.append(("assistant", ""))  # Add empty assistant message
                             scroll_offset = 0
                             generating = True
                             current_response = ""
@@ -239,32 +248,30 @@ class LocalChatbot:
                                 try:
                                     self.chat(user_msg, token_queue=response_queue)
                                 except Exception as e:
-                                    response_queue.put(f"Error: {str(e)}")
+                                    response_queue.put(str(e))
                                     response_queue.put(None)
 
                             threading.Thread(target=generation_thread, daemon=True).start()
                     elif event.key == K_BACKSPACE:
                         input_text = input_text[:-1]
                     elif event.key == K_UP:
-                        # Scroll up
-                        scroll_offset = min(scroll_offset + 3, len(render_chat_lines()) - max_visible_lines)
+                        display_lines = render_chat_lines()
+                        scroll_offset = min(scroll_offset + 3, max(0, len(display_lines) - max_visible_lines))
                     elif event.key == K_DOWN:
-                        # Scroll down
                         scroll_offset = max(scroll_offset - 3, 0)
                     else:
                         input_text += event.unicode
                 elif event.type == MOUSEBUTTONDOWN:
                     if event.button == 4:  # Scroll wheel up
-                        scroll_offset = min(scroll_offset + 3, len(render_chat_lines()) - max_visible_lines)
+                        display_lines = render_chat_lines()
+                        scroll_offset = min(scroll_offset + 3, max(0, len(display_lines) - max_visible_lines))
                     elif event.button == 5:  # Scroll wheel down
                         scroll_offset = max(scroll_offset - 3, 0)
                     elif send_button_rect.collidepoint(event.pos) and not generating:
-                        # Send button clicked
                         msg = input_text.strip()
                         input_text = ""
                         if msg:
                             add_message("user", msg)
-                            chat_messages.append(("assistant", ""))  # Add empty assistant message
                             scroll_offset = 0
                             generating = True
                             current_response = ""
@@ -274,50 +281,48 @@ class LocalChatbot:
                                 try:
                                     self.chat(user_msg, token_queue=response_queue)
                                 except Exception as e:
-                                    response_queue.put(f"Error: {str(e)}")
+                                    response_queue.put(str(e))
                                     response_queue.put(None)
 
                             threading.Thread(target=generation_thread, daemon=True).start()
 
-            # Check for streaming response
+            # Process streaming response
             if generating:
                 while not response_queue.empty():
                     char = response_queue.get()
-                    if char is None:  # End of response
+                    if char is None:
                         generating = False
                         break
                     current_response += char
                 
-                # Update the last assistant message in chat_messages
-                if chat_messages and chat_messages[-1][0] == "assistant":
-                    chat_messages[-1] = ("assistant", current_response)
+                # Update or add assistant message
+                if not chat_messages or chat_messages[-1]["role"] != "assistant":
+                    add_message("assistant", current_response)
+                else:
+                    chat_messages[-1]["content"] = current_response
 
             # Rendering
             screen.fill(BG_COLOR)
 
             # Chat history
             display_lines = render_chat_lines()
-            visible_lines = display_lines[-max_visible_lines - scroll_offset:-scroll_offset if scroll_offset > 0 else None] if display_lines else []
+            start_idx = max(0, len(display_lines) - max_visible_lines - scroll_offset)
+            end_idx = max(0, len(display_lines) - scroll_offset)
+            visible_lines = display_lines[start_idx:end_idx] if display_lines else []
             
             y = 20
-            for role, line in visible_lines:
-                if role == "user":
-                    color = USER_COLOR
-                    current_font = font
-                elif role == "assistant":
-                    color = ASSISTANT_COLOR
-                    current_font = font
-                else:  # system
-                    color = SYSTEM_COLOR
-                    current_font = small_font
+            for line_data in visible_lines:
+                color = (USER_COLOR if line_data["role"] == "user" 
+                        else ASSISTANT_COLOR if line_data["role"] == "assistant"
+                        else SYSTEM_COLOR)
                 
-                surf = current_font.render(line, True, color)
+                surf = line_data["font"].render(line_data["text"], True, color)
                 screen.blit(surf, (30, y))
                 y += line_height
 
             # Thinking indicator
             if generating:
-                thinking_surf = font.render("Assistant is thinking...", True, THINKING_COLOR)
+                thinking_surf = font.render("⟳ Thinking...", True, THINKING_COLOR)
                 screen.blit(thinking_surf, (30, y))
 
             # Input box
@@ -327,13 +332,13 @@ class LocalChatbot:
             input_surf = font.render(input_text + cursor, True, TEXT_COLOR)
             screen.blit(input_surf, (input_rect.x + 15, input_rect.y + 12))
 
-            # Hint when empty
             if not input_text:
-                hint_surf = small_font.render("Type your message here and press Enter...", True, (100, 100, 100))
+                hint_surf = small_font.render("Type message and press Enter...", True, (100, 100, 100))
                 screen.blit(hint_surf, (input_rect.x + 15, input_rect.y + 12))
 
             # Send button
-            pygame.draw.rect(screen, (70, 120, 180) if not generating else (50, 80, 120), send_button_rect, border_radius=8)
+            button_color = (70, 120, 180) if not generating else (50, 80, 120)
+            pygame.draw.rect(screen, button_color, send_button_rect, border_radius=8)
             send_text = small_font.render("Send" if not generating else "...", True, TEXT_COLOR)
             text_rect = send_text.get_rect(center=send_button_rect.center)
             screen.blit(send_text, text_rect)
