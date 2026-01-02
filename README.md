@@ -2,7 +2,8 @@
 
 A fully local, open-source chatbot that runs large language models (LLMs) on your own hardware using Hugging Face Transformers. No internet connection or API key required after the initial model download. Features a simple graphical interface built with Pygame, streaming responses with a typing effect, conversation history, and support for multiple models.
 
-<img width="887" height="681" alt="image" src="https://github.com/user-attachments/assets/1b6935e9-fcc8-4e8f-af17-ac40996623f5" />
+<img width="873" height="693" alt="image" src="https://github.com/user-attachments/assets/46a2c897-1264-49a0-bb0b-610ffa934b7c" />
+
 
 
 
